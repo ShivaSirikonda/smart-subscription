@@ -15,7 +15,8 @@
     <modules>
 
         <module>subscription</module>
-        <module>common</module>
+        <module>authService</module>
+        <module>common-security</module>
     </modules>
 
     <!-- Centralized dependency management -->

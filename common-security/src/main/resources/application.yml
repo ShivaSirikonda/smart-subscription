@@ -1,0 +1,6 @@
+jwt:
+  secret: ${JWT_SECRET:smart-subscription-default-secret-key-256-bit}
+  expiration: 500000
+
+server:
+  port: 8081
