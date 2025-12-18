@@ -7,6 +7,7 @@ networks:
 volumes:
   auth_postgres_data:
   subscription_postgres_data:
+  payment_postgres_data:
 
 services:
   # ========== DATABASES ==========
@@ -21,7 +22,7 @@ services:
       POSTGRES_PASSWORD: auth_pass
       TZ: Asia/Kolkata
     ports:
-      - "6432:5432"  # Changed from 5432 to 6432
+      - "6432:5432"
     volumes:
       - auth_postgres_data:/var/lib/postgresql/data
     networks:
@@ -42,7 +43,7 @@ services:
       POSTGRES_PASSWORD: subscription_pass
       TZ: Asia/Kolkata
     ports:
-      - "6433:5432"  # Changed from 5433 to 6433
+      - "6433:5432"
     volumes:
       - subscription_postgres_data:/var/lib/postgresql/data
       - ./subscription-service/src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
@@ -55,118 +56,120 @@ services:
       timeout: 5s
       retries: 5
 
-  # Kafka (for async communication)
+  # ========== PAYMENT SERVICE DATABASE ==========
+
+  # Payment Service Database
+  payment-postgres:
+    image: postgres:16
+    container_name: payment-postgres
+    environment:
+      POSTGRES_DB: payment_db
+      POSTGRES_USER: payment_user
+      POSTGRES_PASSWORD: payment_pass
+      TZ: Asia/Kolkata
+    ports:
+      - "6434:5432"  # New port for payment DB
+    volumes:
+      - subscription_postgres_data:/var/lib/postgresql/data
+      - ./subscription-service/src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./subscription-service/src/main/resources/data.sql:/docker-entrypoint-initdb.d/02-data.sql
+    networks:
+      - smart-subscription-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_user -d payment_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      - auth-postgres
+      - subscription-postgres
+
+  # ========== KAFKA ==========
+
   zookeeper:
-    image: confluentinc/cp-zookeeper:latest
+    image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
     ports:
-      - "3181:2181"  # Changed from 2181 to 3181
+      - "2181:2181"
     networks:
       - smart-subscription-network
     healthcheck:
-      test: ["CMD-SHELL", "echo ruok | nc localhost 2181"]
+      test: ["CMD-SHELL", "echo stat | nc localhost 2181"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
     depends_on:
       zookeeper:
         condition: service_healthy
-    ports:
-      - "9093:9092"    # Changed from 9092 to 9093
-      - "29093:29092"  # Changed from 29092 to 29093
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_LOG_RETENTION_HOURS: 168
+    ports:
+      - "9092:9092"
     networks:
       - smart-subscription-network
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ========== REDIS (Optional for caching) ==========
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - smart-subscription-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # ========== SERVICES ==========
+  # ========== ADMINER (Database Management) ==========
 
-  # API Gateway
-  gateway:
-    build:
-      context: ./gateway-service
-      dockerfile: Dockerfile
-    container_name: api-gateway
+  adminer:
+    image: adminer
+    container_name: adminer
     ports:
-      - "8090:8080"  # Changed from 8080 to 8090
-    environment:
-      JWT_SECRET: "your-256-bit-secret-key-here-minimum-32-chars"
-      SPRING_PROFILES_ACTIVE: docker
-    depends_on:
-      auth-postgres:
-        condition: service_healthy
-      subscription-postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
+      - "8080:8080"
     networks:
       - smart-subscription-network
-    restart: unless-stopped
-
-  # Auth Service
-  auth-service:
-    build:
-      context: ./auth-service
-      dockerfile: Dockerfile
-    container_name: auth-service
-    ports:
-      - "8091:8080"  # Changed from 8081 to 8091
-    environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://auth-postgres:5432/auth_db
-      SPRING_DATASOURCE_USERNAME: auth_user
-      SPRING_DATASOURCE_PASSWORD: auth_pass
-      SPRING_JPA_HIBERNATE_DDL_AUTO: update
-      JWT_SECRET: "your-256-bit-secret-key-here-minimum-32-chars"
-      JWT_EXPIRATION: 86400000
-      SERVER_PORT: 8080
-      SPRING_PROFILES_ACTIVE: docker
     depends_on:
-      auth-postgres:
-        condition: service_healthy
+      - auth-postgres
+      - subscription-postgres
+      - payment-postgres
+
+  # ========== KAFKA UI (Optional) ==========
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8081:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: smart-subscription
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
     networks:
       - smart-subscription-network
-    restart: unless-stopped
-
-  # Subscription Service
-  subscription-service:
-    build:
-      context: ./subscription-service
-      dockerfile: Dockerfile
-    container_name: subscription-service
-    ports:
-      - "8092:8080"  # Changed from 8082 to 8092
-    environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://subscription-postgres:5432/subscription_db
-      SPRING_DATASOURCE_USERNAME: subscription_user
-      SPRING_DATASOURCE_PASSWORD: subscription_pass
-      SPRING_JPA_HIBERNATE_DDL_AUTO: update
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SERVER_PORT: 8080
-      SPRING_PROFILES_ACTIVE: docker
     depends_on:
-      subscription-postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    networks:
-      - smart-subscription-network
-    restart: unless-stopped
+      - kafka
+      - zookeeper
