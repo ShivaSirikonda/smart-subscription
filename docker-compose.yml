@@ -8,11 +8,10 @@ volumes:
   auth_postgres_data:
   subscription_postgres_data:
   payment_postgres_data:
+  notification_postgres_data:
 
 services:
   # ========== DATABASES ==========
-
-  # Auth Service Database
   auth-postgres:
     image: postgres:16
     container_name: auth-postgres
@@ -33,7 +32,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # Subscription Service Database
   subscription-postgres:
     image: postgres:16
     container_name: subscription-postgres
@@ -56,9 +54,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ========== PAYMENT SERVICE DATABASE ==========
-
-  # Payment Service Database
   payment-postgres:
     image: postgres:16
     container_name: payment-postgres
@@ -68,11 +63,9 @@ services:
       POSTGRES_PASSWORD: payment_pass
       TZ: Asia/Kolkata
     ports:
-      - "6434:5432"  # New port for payment DB
+      - "6434:5432"
     volumes:
-      - subscription_postgres_data:/var/lib/postgresql/data
-      - ./subscription-service/src/main/resources/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
-      - ./subscription-service/src/main/resources/data.sql:/docker-entrypoint-initdb.d/02-data.sql
+      - payment_postgres_data:/var/lib/postgresql/data
     networks:
       - smart-subscription-network
     healthcheck:
@@ -80,12 +73,28 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    depends_on:
-      - auth-postgres
-      - subscription-postgres
+
+  notification-postgres:
+    image: postgres:16
+    container_name: notification-postgres
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: notification_user
+      POSTGRES_PASSWORD: notification_pass
+      TZ: Asia/Kolkata
+    ports:
+      - "6435:5432"
+    volumes:
+      - notification_postgres_data:/var/lib/postgresql/data
+    networks:
+      - smart-subscription-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notification_user -d notification_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # ========== KAFKA ==========
-
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.0
     container_name: zookeeper
@@ -96,40 +105,30 @@ services:
       - "2181:2181"
     networks:
       - smart-subscription-network
-    healthcheck:
-      test: ["CMD-SHELL", "echo stat | nc localhost 2181"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
   kafka:
     image: confluentinc/cp-kafka:7.5.0
     container_name: kafka
     depends_on:
-      zookeeper:
-        condition: service_healthy
+      - zookeeper
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
       KAFKA_LOG_RETENTION_HOURS: 168
     ports:
       - "9092:9092"
     networks:
       - smart-subscription-network
-    healthcheck:
-      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:9092 --list"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
 
-  # ========== REDIS (Optional for caching) ==========
 
+  # ========== REDIS ==========
   redis:
     image: redis:7-alpine
     container_name: redis
@@ -137,14 +136,8 @@ services:
       - "6379:6379"
     networks:
       - smart-subscription-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
 
-  # ========== ADMINER (Database Management) ==========
-
+  # ========== ADMINER ==========
   adminer:
     image: adminer
     container_name: adminer
@@ -156,9 +149,9 @@ services:
       - auth-postgres
       - subscription-postgres
       - payment-postgres
+      - notification-postgres
 
-  # ========== KAFKA UI (Optional) ==========
-
+  # ========== KAFKA UI ==========
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
     container_name: kafka-ui

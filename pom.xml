@@ -18,6 +18,7 @@
         <module>authService</module>
         <module>common-security</module>
         <module>Payment</module>
+        <module>notification</module>
     </modules>
 
     <!-- Centralized dependency management -->

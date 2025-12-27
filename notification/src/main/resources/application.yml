@@ -1,0 +1,54 @@
+server:
+  port: 8085
+
+spring:
+  application:
+    name: notification-service
+
+  datasource:
+    url: jdbc:postgresql://localhost:6435/notification_db   # host + mapped port
+    username: notification_user
+    password: notification_pass
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: -1
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 60000  # wait longer for DB startup
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        temp:
+          use_jdbc_metadata_defaults: false   # avoids premature metadata lookup
+
+  kafka:
+    bootstrap-servers: localhost:9092       # host + mapped Kafka port
+    consumer:
+      group-id: notification-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.use.type.headers: false
+    listener:
+      missing-topics-fatal: false           # app won’t fail if topic isn’t ready
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    com.smartsubscription.notification: DEBUG
+    org.springframework: INFO
+    org.hibernate: INFO
+    org.hibernate.SQL: DEBUG
